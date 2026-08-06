@@ -8,6 +8,10 @@ This header manages:
 - storing parsed entries in an internal map,
 - retrieving raw string values.
 
+Define `PARSE_PARAMS_IMPLEMENTATION` in exactly one translation unit before
+including this header. Other translation units see the shared storage through
+`extern` declarations.
+
 Type conversion (`int`, `double`, `bool`) is intentionally handled in
 `params.h`.
 
@@ -45,14 +49,22 @@ typedef struct {
 /**
 ## Internal Storage
 
-Static storage keeps the implementation header-only and convenient for
-single-binary simulation workflows.
+The single-include implementation pattern keeps the API header-only while
+ensuring that every translation unit uses one shared parameter map.
 */
-static ParseParamEntry _parse_params_entries[PARSE_PARAMS_MAX_ENTRIES];
-static int _parse_params_count = 0;
-static bool _parse_params_loaded = false;
-static bool _parse_params_warned_missing = false;
-static char _parse_params_file[PARSE_PARAMS_VALUE_LEN] = "case.params";
+#ifdef PARSE_PARAMS_IMPLEMENTATION
+ParseParamEntry _parse_params_entries[PARSE_PARAMS_MAX_ENTRIES] = {{0}};
+int _parse_params_count = 0;
+bool _parse_params_loaded = false;
+bool _parse_params_warned_missing = false;
+char _parse_params_file[PARSE_PARAMS_VALUE_LEN] = "case.params";
+#else
+extern ParseParamEntry _parse_params_entries[PARSE_PARAMS_MAX_ENTRIES];
+extern int _parse_params_count;
+extern bool _parse_params_loaded;
+extern bool _parse_params_warned_missing;
+extern char _parse_params_file[PARSE_PARAMS_VALUE_LEN];
+#endif
 
 /**
 ### parse_params_trim()

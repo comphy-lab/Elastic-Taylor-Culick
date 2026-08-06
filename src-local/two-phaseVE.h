@@ -22,7 +22,7 @@ scalar f[], * interfaces = {f};
 double rho1 = 1., mu1 = 0., rho2 = 1., mu2 = 0.;
 double G1 = 0., G2 = 0.; // elastic moduli
 double lambda1 = 0., lambda2 = 0.; // relaxation times
-double TOLelastic = 1e-2; // tolerance for elastic modulus #TOFIX: this must always be a very small number.
+double TOLelastic = 1e-2; // phase-fraction cutoff; keep it small compared with one.
 
 /**
 Auxiliary fields define the specific volume $\alpha = 1/\rho$ and the

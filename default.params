@@ -6,6 +6,7 @@ Ldomain = 100.
 tmax = 25.
 tsnap = 0.25
 dtmax = 1e-5
+TOLelastic = 1e-2
 
 # f = 1: dense retracting phase.
 rho1 = 1.

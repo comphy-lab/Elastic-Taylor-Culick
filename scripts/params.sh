@@ -75,7 +75,7 @@ copy_without_sweep_params() {
       key = $1
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
       if (key == "CASE_START" || key == "CASE_END" ||
-          key ~ /^SWEEP_$/ || key ~ /^SWEEP_/) next
+          key ~ /^SWEEP_/) next
       print
     }
   ' "$source_file" > "$destination_file"

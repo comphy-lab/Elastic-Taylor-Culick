@@ -31,7 +31,9 @@ The root runner passes the copied `case.params` file to the executable.
 
 #include "navier-stokes/conserving.h"
 #include "tension.h"
+#define PARSE_PARAMS_IMPLEMENTATION
 #include "params.h"
+#undef PARSE_PARAMS_IMPLEMENTATION
 
 /**
 ## Numerical controls
@@ -87,12 +89,14 @@ int main (int argc, char const * argv[])
   lambda1 = param_double("lambda1", param_double("De", 1e30));
   G2 = param_double("G2", 0.);
   lambda2 = param_double("lambda2", 0.);
+  TOLelastic = param_double("TOLelastic", 1e-2);
 
   if (CaseNo < 1000 || MAXlevel < 1 || MAXlevel > 20 ||
       MINlevel < 1 || MINlevel > MAXlevel || Ldomain <= 0. ||
       tmax <= 0. || tsnap <= 0. || dtmax <= 0. || dtmax > tmax ||
       rho1 <= 0. || rho2 <= 0. || mu1 < 0. || mu2 < 0. ||
-      G1 < 0. || G2 < 0. || lambda1 < 0. || lambda2 < 0.) {
+      G1 < 0. || G2 < 0. || lambda1 < 0. || lambda2 < 0. ||
+      TOLelastic < 0. || TOLelastic >= 0.5) {
     fprintf(ferr, "ERROR: invalid runtime parameters.\n");
     return 1;
   }
@@ -123,6 +127,7 @@ int main (int argc, char const * argv[])
             "phase1: rho=%g mu=%g G=%g lambda=%g; "
             "phase2: rho=%g mu=%g G=%g lambda=%g\n",
             rho1, mu1, G1, lambda1, rho2, mu2, G2, lambda2);
+    fprintf(ferr, "TOLelastic=%g\n", TOLelastic);
   }
 
   run();
@@ -186,6 +191,8 @@ legacy case: energy blow-up or complete decay after the initial transient.
 event log_writing (i++)
 {
   double ke = 0.;
+  int stop = 0;
+  int dump_state = 0;
   foreach (reduction(+:ke))
     ke += (2.*pi*y)*(0.5*rho(f[])*
                      (sq(u.x[]) + sq(u.y[])))*sq(Delta);
@@ -194,31 +201,37 @@ event log_writing (i++)
     FILE * fp = fopen(logFile, i == 0 ? "w" : "a");
     if (!fp) {
       fprintf(ferr, "ERROR: cannot open %s\n", logFile);
-      return 1;
+      stop = 1;
     }
+    else {
+      if (i == 0) {
+        fprintf(fp, "CaseNo %d, MAXlevel %d, G1 %g, lambda1 %g\n",
+                CaseNo, MAXlevel, G1, lambda1);
+        fprintf(fp, "i dt t ke\n");
+      }
+      fprintf(fp, "%d %.8e %.8e %.8e\n", i, dt, t, ke);
+      fclose(fp);
+      fprintf(ferr, "%d %.8e %.8e %.8e\n", i, dt, t, ke);
 
-    if (i == 0) {
-      fprintf(fp, "CaseNo %d, MAXlevel %d, G1 %g, lambda1 %g\n",
-              CaseNo, MAXlevel, G1, lambda1);
-      fprintf(fp, "i dt t ke\n");
-    }
-    fprintf(fp, "%d %.8e %.8e %.8e\n", i, dt, t, ke);
-    fclose(fp);
-    fprintf(ferr, "%d %.8e %.8e %.8e\n", i, dt, t, ke);
-
-    if (ke > 1e2 && i > 10) {
-      fprintf(ferr, "ERROR: kinetic energy blew up.\n");
-      dump(file = dumpFile);
-      return 1;
-    }
-    if (ke < 1e-8 && i > 10) {
-      fprintf(ferr, "Kinetic energy decayed below the stopping threshold.\n");
-      dump(file = dumpFile);
-      return 1;
+      if (ke > 1e2 && i > 10) {
+        fprintf(ferr, "ERROR: kinetic energy blew up.\n");
+        stop = 1;
+        dump_state = 1;
+      }
+      if (ke < 1e-8 && i > 10) {
+        fprintf(ferr, "Kinetic energy decayed below the stopping threshold.\n");
+        stop = 1;
+        dump_state = 1;
+      }
     }
   }
 
+  mpi_all_reduce(stop, MPI_INT, MPI_MAX);
+  mpi_all_reduce(dump_state, MPI_INT, MPI_MAX);
+  if (dump_state)
+    dump(file = dumpFile);
   assert(ke > -1e-10);
+  return stop;
 }
 
 /**
