@@ -1,0 +1,20 @@
+# Viscoelastic Taylor--Culick default case.
+CaseNo = 1000
+MAXlevel = 10
+MINlevel = 6
+Ldomain = 100.
+tmax = 25.
+tsnap = 0.25
+dtmax = 1e-5
+
+# Finite relaxation in the dense retracting phase.
+rho1 = 1.
+mu1 = 0.05
+G1 = 1.
+lambda1 = 1.
+
+# Newtonian surrounding phase.
+rho2 = 1e-3
+mu2 = 1e-5
+G2 = 0.
+lambda2 = 0.

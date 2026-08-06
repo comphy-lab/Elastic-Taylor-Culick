@@ -1,0 +1,19 @@
+# Two-case contract check: finite-relaxation and elastic limits.
+CASE_START = 1000
+CASE_END = 1001
+
+MAXlevel = 6
+MINlevel = 5
+Ldomain = 20.
+tmax = 0.05
+tsnap = 0.05
+dtmax = 1e-4
+rho1 = 1.
+mu1 = 0.05
+rho2 = 1e-3
+mu2 = 1e-5
+G1 = 1.
+G2 = 0.
+lambda2 = 0.
+
+SWEEP_lambda1 = 1.,1e30
