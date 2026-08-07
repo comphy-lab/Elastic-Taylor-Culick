@@ -61,3 +61,7 @@ basilisk/
 # Agent/editor pointer and generated simulation cases
 CLAUDE.md
 simulationCases/c*/
+
+# postProcess compiled Basilisk programs (built by run_postprocess.sh)
+postProcess/.build/
+postProcess/__pycache__/

@@ -17,7 +17,16 @@ planar semi-infinite sheet -- sharing one constitutive path: the scalar
 │   ├── two-phaseVE.h - Per-phase VE material-property coupling
 │   ├── parse_params.h - key=value file loader
 │   └── params.h - typed runtime accessors
-├── postProcess/tip_to_csv.py - Tip log to t,tstar,x_tip,v_tip,v_over_VTC CSV
+├── postProcess/ - Basilisk-native and offline post-processing
+│   ├── tip_to_csv.py - In-code tip log to t,tstar,x_tip,v_tip,v_over_VTC CSV
+│   ├── get_facets.c - Interface segments from a snapshot (output_facets)
+│   ├── get_tip.c - Independent tip position/velocity, recomputed from a
+│   │   snapshot rather than read from the in-code log
+│   ├── get_fields.c - f/u/KAPPA (+ A11..T22 under -DVISCOELASTIC=1)
+│   │   interpolated onto a grid from a snapshot
+│   ├── run_postprocess.sh - Compiles the three above and runs them over a
+│   │   case directory's intermediate/snapshot-* files
+│   └── plot_fields.py - Renders per-snapshot PNG frames and an mp4
 ├── scripts/params.sh - Shared shell parameter helpers
 ├── default.params - Purely elastic axisymmetric default (lambda1 = 1e30)
 ├── default-viscoelastic.params - Finite-relaxation axisymmetric default
@@ -147,6 +156,44 @@ which writes `tip_velocity.csv` with `t,tstar,x_tip,v_tip,v_over_VTC`. The
 speed is a local first-order least-squares slope over `--window` samples,
 which is far less noisy than a two-point difference at the sub-cell scale of
 the VOF reconstruction.
+
+## Post-processing from snapshots
+
+`event writing_files` already `dump()`s a restartable snapshot every `tsnap`
+into `intermediate/`. `postProcess/get_facets.c`, `get_tip.c` and
+`get_fields.c` are small standalone Basilisk programs that `restore()` one of
+those snapshots directly, rather than depending on anything the run wrote
+about itself, so they can also re-derive the tip diagnostic and extract
+fields the running case never logged. `get_tip.c`'s recomputed `x_tip` has
+been checked bit-for-bit against the in-code `c<CaseNo>-tip.dat` log across a
+full 81-snapshot run; a mismatch would flag a bug in one of the two
+independent paths.
+
+`get_fields.c` is compiled once plain (`f`, `u.x`, `u.y`, `KAPPA`) and once
+with `-DVISCOELASTIC=1` (adds `A11 A12 A22 T11 T12 T22` from
+`log-conform-viscoelastic-scalar-2D.h`) -- compile the variant matching the
+case a snapshot came from; requesting a field absent from that snapshot reads
+back as exactly zero rather than erroring (`restore()`'s documented behaviour
+for a requested-but-undumped field name).
+
+Run the full pipeline over a case directory:
+
+```bash
+bash postProcess/run_postprocess.sh --case-dir <run-dir> [--viscoelastic] --video
+```
+
+This compiles the three programs with `qcc -disable-dimensions` (a plain
+post-processing pass over restored data, not a physics solve, so Basilisk's
+dimensional-consistency checker is not relevant here), then for every
+`intermediate/snapshot-*` writes `<run-dir>/postprocess/{tip_snapshots.csv,
+facets/, fields/}`. The field-extraction window auto-follows the tip
+(`--window-behind`/`--window-ahead`/`--window-y`, in units of `h0`) since the
+edge travels O(100) sheet thicknesses over a run and a fixed window would
+either miss the early interface or crop the late one. `--video` additionally
+renders PNG frames and an mp4 via `plot_fields.py`, which needs matplotlib
+and ffmpeg -- both are in the `elastic-tc-postprocess` conda env
+(`conda create -n elastic-tc-postprocess --override-channels -c conda-forge
+python=3.11 numpy matplotlib ffmpeg`).
 
 ## Phase rheology
 
