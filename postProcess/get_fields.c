@@ -53,6 +53,14 @@ int main(int argc, char const * argv[])
   double ymin = atof(argv[4]), ymax = atof(argv[5]);
   int ny = atoi(argv[6]);
   double mu1 = atof(argv[7]), mu2 = atof(argv[8]);
+  if (!isfinite(xmin) || !isfinite(xmax) || xmax <= xmin ||
+      !isfinite(ymin) || !isfinite(ymax) || ymax <= ymin || ny <= 0 ||
+      !isfinite(mu1) || !isfinite(mu2)) {
+    fprintf(stderr,
+            "%s: require finite bounds with xmax > xmin, ymax > ymin, "
+            "ny > 0, and finite viscosities\n", argv[0]);
+    return 1;
+  }
   if (!restore(file = argv[1])) {
     fprintf(stderr, "%s: cannot restore '%s'\n", argv[0], argv[1]);
     return 1;
@@ -70,6 +78,8 @@ int main(int argc, char const * argv[])
 
   double dy = (ymax - ymin)/ny;
   int nx = (int)((xmax - xmin)/dy);
+  if (nx < 1)
+    nx = 1;
   double dx = (xmax - xmin)/nx;
 
   fprintf(stdout, "# nx %d ny %d\n", nx, ny);

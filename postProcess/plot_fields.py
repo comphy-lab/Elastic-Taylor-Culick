@@ -106,7 +106,7 @@ def read_facets(fname: str) -> list[np.ndarray]:
     return segments
 
 
-def read_fields(fname: str):
+def read_fields(fname: str, viscoelastic: bool):
     """Return columns as 2D arrays shaped (nx, ny) from the
     ``# nx N ny N`` header `get_fields` writes."""
     with open(fname) as fh:
@@ -117,6 +117,13 @@ def read_fields(fname: str):
     nx, ny = int(m.group(1)), int(m.group(2))
     data = np.loadtxt(fname, comments="#")
     ncols = data.shape[1]
+    expected_ncols = 13 if viscoelastic else 7
+    if ncols != expected_ncols:
+        variant = "viscoelastic" if viscoelastic else "Newtonian"
+        raise ValueError(
+            f"{fname}: expected {expected_ncols} columns for the {variant} "
+            f"variant, found {ncols}"
+        )
     names = ["x", "y", "f", "ux", "uy", "kappa", "phi"]
     if ncols > len(names):
         names += ["A11", "A12", "A22", "T11", "T12", "T22"][: ncols - len(names)]
@@ -213,10 +220,14 @@ def mirrored_panel(ax, cax, cols, segments, values, cmap, norm_kwargs,
 
 
 def render_frame(facets_file: str, wide_file: str, comoving_file: str,
-                  out_png: str, t: float) -> None:
-    segments = read_facets(facets_file)
-    wide = read_fields(wide_file)
-    com = read_fields(comoving_file)
+                  out_png: str, t: float, h0: float,
+                  viscoelastic: bool) -> None:
+    segments = [segment / h0 for segment in read_facets(facets_file)]
+    wide = read_fields(wide_file, viscoelastic)
+    com = read_fields(comoving_file, viscoelastic)
+    for cols in (wide, com):
+        cols["x"] /= h0
+        cols["y"] /= h0
     umag_wide = np.hypot(wide["ux"], wide["uy"]) / V_TC
     phi_lim = phi_range(com["phi"])
 
@@ -279,9 +290,8 @@ def main() -> int:
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--case-dir", required=True)
     ap.add_argument("--viscoelastic", action="store_true",
-                     help="unused here beyond validating the fields file "
-                          "has the expected extra columns; kept for "
-                          "symmetry with run_postprocess.sh's flag")
+                     help="require the six viscoelastic field columns in "
+                          "addition to the seven Newtonian columns")
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--mathtext", action="store_true",
                      help="use matplotlib's mathtext instead of real LaTeX "
@@ -291,6 +301,20 @@ def main() -> int:
     configure_typography(args.mathtext)
 
     case_dir = args.case_dir
+    params_file = os.path.join(case_dir, "case.params")
+    with open(params_file) as fh:
+        params = dict(
+            line.strip().split("=", 1)
+            for line in fh
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+    try:
+        h0 = float(params["h0"])
+    except (KeyError, ValueError) as exc:
+        raise SystemExit(f"{params_file}: missing or invalid h0") from exc
+    if not np.isfinite(h0) or h0 <= 0.0:
+        raise SystemExit(f"{params_file}: h0 must be finite and positive")
+
     pp_dir = os.path.join(case_dir, "postprocess")
     facets_dir = os.path.join(pp_dir, "facets")
     fields_dir = os.path.join(pp_dir, "fields")
@@ -317,7 +341,7 @@ def main() -> int:
         wide_file = os.path.join(wide_dir, f"snapshot-{tstamp}.dat")
         out_png = os.path.join(frames_dir, f"frame-{idx:05d}.png")
         render_frame(facets_file, wide_file, fields_file, out_png,
-                     float(tstamp))
+                     float(tstamp), h0, args.viscoelastic)
         print(f"  t={tstamp} -> {out_png}")
 
     video_path = os.path.join(pp_dir, "taylor_culick.mp4")

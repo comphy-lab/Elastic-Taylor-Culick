@@ -179,9 +179,13 @@ echo "t,x_tip,x_tip_vof,x_tip_global,u_tip_x" > "$TIP_CSV"
 # Snapshot filenames are `snapshot-<t>`; sort numerically on the suffix, not
 # lexicographically (lexicographic sort would put snapshot-10.0 before
 # snapshot-2.0).
-mapfile -t SNAPSHOTS < <(
-  find "$SNAP_DIR" -maxdepth 1 -name 'snapshot-*' -printf '%f\n' |
-    sort -t- -k2 -g
+SNAPSHOTS=()
+while IFS= read -r snap; do
+  SNAPSHOTS[${#SNAPSHOTS[@]}]="$snap"
+done < <(
+  for snap_path in "$SNAP_DIR"/snapshot-*; do
+    [[ -f "$snap_path" ]] && basename "$snap_path"
+  done | sort -t- -k2 -g
 )
 [[ ${#SNAPSHOTS[@]} -gt 0 ]] || {
   echo "ERROR: no snapshot-* files under $SNAP_DIR" >&2; exit 1; }
