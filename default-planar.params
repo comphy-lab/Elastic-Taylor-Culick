@@ -1,0 +1,41 @@
+# Planar Taylor--Culick default case (Newtonian limit).
+#
+# rho1 = sigma = h0 = 1 with h0 the FULL sheet thickness, so the
+# half-thickness is 0.5 and the Taylor--Culick speed is V_TC = sqrt(2).
+# mu1 is the Ohnesorge number Oh = mu/sqrt(rho*sigma*h0).
+#
+# Savva & Bush (JFM 626, 2009) use the half-thickness in their Ohnesorge
+# number, Oh_SB = mu/sqrt(2*h0*rho*sigma) = Oh/sqrt(2), so a case quoted at
+# Oh_SB is run here with mu1 = sqrt(2)*Oh_SB.  Their viscous time is
+# tau_vis = mu1/2 and their reduced time is t* = t/tau_vis; the tip file
+# reports both clocks.
+#
+# The values below are Oh_SB = 0.1, i.e. mu1 = sqrt(2)*0.1.
+CaseNo = 1000
+MAXlevel = 12
+MINlevel = 6
+Ldomain = 128.
+tmax = 40.
+tsnap = 0.5
+tout = 0.02
+dtmax = 5e-3
+VELERR = 1e-3
+TOLelastic = 1e-2
+
+# Sheet geometry: full thickness h0, initial edge position xtip0.
+# Keep Ldomain > xtip0 + sqrt(2)*tmax with a comfortable margin so the sheet
+# stays effectively semi-infinite.
+h0 = 1.
+xtip0 = 1.
+
+# f = 1: retracting sheet. G1 = 0 gives the Newtonian limit.
+rho1 = 1.
+mu1 = 0.14142136
+G1 = 0.
+lambda1 = 0.
+
+# f = 0: surrounding gas.
+rho2 = 1e-3
+mu2 = 1e-5
+G2 = 0.
+lambda2 = 0.
