@@ -9,9 +9,9 @@
 #
 # Usage:
 #   run_postprocess.sh --case-dir DIR [--viscoelastic]
-#                       [--window N] [--window-y N] [--ny N]
-#                       [--wide-fraction F] [--wide-y N] [--wide-ny N]
-#                       [--video] [--fps N]
+#                       [--window-left N] [--window-right N] [--window-y N]
+#                       [--ny N] [--wide-fraction F] [--wide-y N]
+#                       [--wide-ny N] [--video] [--fps N]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,9 +29,18 @@ Options:
   --viscoelastic       Also extract A11/A12/A22/T11/T12/T22 (the snapshot
                        must come from TaylorCulickPlanar.c, not the
                        Newtonian-only case)
-  --window N           Comoving field window half-width, centred on the
-                       tip, in units of h0 (default 10) -- window is
-                       [x_tip - N*h0, x_tip + N*h0]
+  --window-left N      Comoving field window extent behind the tip, in
+                       units of h0 (default 2.5) -- the gas side carries
+                       little extra structure past a small margin, so this
+                       stays tight to leave more of the panel for the
+                       rim-to-film connection ahead of the tip
+  --window-right N     Comoving field window extent ahead of the tip, in
+                       units of h0 (default 20) -- measured from the
+                       largest-rim snapshot of a real run: the bulge apex
+                       sits ~4*h0 ahead of the tip, and the interface
+                       doesn't fully re-flatten to the undisturbed film
+                       thickness (h0/2) until about tip+16 to tip+20, so 20
+                       leaves a clean margin of flat film past the neck
   --window-y N         Comoving field window height above the midplane, in
                        units of h0 (default 10)
   --ny N               Grid rows in the comoving field window (default 200
@@ -57,7 +66,8 @@ EOF
 
 CASE_DIR=""
 VISCOELASTIC=0
-WINDOW=10
+WINDOW_LEFT=2.5
+WINDOW_RIGHT=20
 WINDOW_Y=10
 NY=200
 WIDE_FRACTION=0.5
@@ -70,7 +80,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --case-dir) CASE_DIR="$2"; shift 2 ;;
     --viscoelastic) VISCOELASTIC=1; shift ;;
-    --window) WINDOW="$2"; shift 2 ;;
+    --window-left) WINDOW_LEFT="$2"; shift 2 ;;
+    --window-right) WINDOW_RIGHT="$2"; shift 2 ;;
     --window-y) WINDOW_Y="$2"; shift 2 ;;
     --ny) NY="$2"; shift 2 ;;
     --wide-fraction) WIDE_FRACTION="$2"; shift 2 ;;
@@ -156,13 +167,17 @@ for snap in "${SNAPSHOTS[@]}"; do
 
   "$BUILD_DIR/get_facets" "$snap_path" > "$FACETS_DIR/snapshot-$tstamp.dat"
 
-  # Comoving window is centred on the tip -- symmetric, not skewed toward
-  # either side. Clamped to the domain: early in a run the tip sits close
-  # to x=0 (X0=0), so an unclamped x_tip - W*h0 goes negative and
-  # interpolate() returns Basilisk's `nodata` (~1e30) for every point out
-  # there, which silently blows up the dissipation colour range.
-  xmin=$(awk -v x="$xtip" -v h="$H0" -v w="$WINDOW" 'BEGIN{v=x-w*h; print (v<0)?0:v}')
-  xmax=$(awk -v x="$xtip" -v h="$H0" -v w="$WINDOW" -v l="$LDOMAIN" \
+  # Comoving window is deliberately asymmetric: tight behind the tip (the
+  # gas side carries little extra structure) and wide ahead of it (the rim
+  # grows over the run -- to ~4*h0 radius by the end of a real run -- and
+  # showing the neck settle back to the undisturbed film needs real margin).
+  # Clamped to the domain: early in a run the tip sits close to x=0
+  # (X0=0), so an unclamped x_tip - W*h0 goes negative and interpolate()
+  # returns Basilisk's `nodata` (~1e30) for every point out there, which
+  # silently blows up the dissipation colour range.
+  xmin=$(awk -v x="$xtip" -v h="$H0" -v w="$WINDOW_LEFT" \
+    'BEGIN{v=x-w*h; print (v<0)?0:v}')
+  xmax=$(awk -v x="$xtip" -v h="$H0" -v w="$WINDOW_RIGHT" -v l="$LDOMAIN" \
     'BEGIN{v=x+w*h; print (v>l)?l:v}')
   ymax=$(awk -v h="$H0" -v w="$WINDOW_Y" 'BEGIN{print w*h}')
   "$BUILD_DIR/get_fields" "$snap_path" "$xmin" "$xmax" 0 "$ymax" "$NY" \
