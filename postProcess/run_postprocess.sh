@@ -7,11 +7,16 @@
 # the retracting tip (moves with it every snapshot) and one over a fixed
 # [0, wide-fraction*Ldomain] span of the domain.
 #
+# The comoving window's y-extent and right (ahead-of-tip) extent scale with
+# the rim, not a fixed h0 multiple -- see the R_est derivation below.
+#
 # Usage:
 #   run_postprocess.sh --case-dir DIR [--viscoelastic]
-#                       [--window-left N] [--window-right N] [--window-y N]
-#                       [--ny N] [--wide-fraction F] [--wide-y N]
-#                       [--wide-ny N] [--video] [--fps N]
+#                       [--window-left N] [--window-y-coef N]
+#                       [--window-y-offset N] [--window-right-coef N]
+#                       [--window-right-offset N] [--ny N]
+#                       [--wide-fraction F] [--wide-y N] [--wide-ny N]
+#                       [--video] [--fps N]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,20 +37,34 @@ Options:
   --window-left N      Comoving field window extent behind the tip, in
                        units of h0 (default 2.5) -- the gas side carries
                        little extra structure past a small margin, so this
-                       stays tight to leave more of the panel for the
-                       rim-to-film connection ahead of the tip
-  --window-right N     Comoving field window extent ahead of the tip, in
-                       units of h0 (default 20) -- measured from the
-                       largest-rim snapshot of a real run: the bulge apex
-                       sits ~4*h0 ahead of the tip, and the interface
-                       doesn't fully re-flatten to the undisturbed film
-                       thickness (h0/2) until about tip+16 to tip+20, so 20
-                       leaves a clean margin of flat film past the neck
-  --window-y N         Comoving field window height above the midplane, in
-                       units of h0 (default 10)
+                       stays fixed rather than scaling with the rim, unlike
+                       the window ahead of the tip
+  --window-y-coef N    Comoving window half-height = coef*R_est + offset,
+                       in units of h0 (default coef 2.0, offset 2.0)
+  --window-y-offset N
+  --window-right-coef N
+                       Comoving window extent ahead of the tip =
+                       coef*R_est + offset, in units of h0 (default coef
+                       4.0, offset 6.0)
+  --window-right-offset N
+                       R_est = sqrt(h0*(x_tip - xtip0)/pi) is a mass-
+                       conservation estimate of the rim's radius: the
+                       liquid swept by the retracting edge (h0*(x_tip -
+                       xtip0) per unit span, upper half only) is assumed to
+                       collect into a half-disk of radius R_est. Checked
+                       against a real run's measured rim apex height and
+                       neck-to-film reflattening distance at t=10/20/30/40:
+                       apex height tracks R_est to within 11% (3% by
+                       t=40), and reflattening distance fits
+                       2.87*R_est+4.91 (R^2~1) almost exactly -- the
+                       defaults above are that fit plus ~30-40% margin.
+                       R_est needs no smoothing (it is a monotonic function
+                       of x_tip, already smooth) and degrades gracefully at
+                       t=0 (R_est=0, so the offsets alone set the window),
+                       so no separate floor logic is needed.
   --ny N               Grid rows in the comoving field window (default 200
-                       -- scaled up from window-y=2's original 80 to hold
-                       the same ~0.1*h0 resolution at window-y=10)
+                       -- scaled up from the original 80 to hold ~0.1*h0
+                       resolution at the larger comoving windows)
   --wide-fraction F    Wide-view window as a fraction of Ldomain, fixed at
                        [0, F*Ldomain] for every snapshot (default 0.5 -- the
                        point of row 1 is the whole domain's air flow over
@@ -54,7 +73,10 @@ Options:
                        panels' relationship stays legible even when the rim
                        is a small feature of row 1)
   --wide-y N           Wide-view window height above the midplane, in
-                       units of h0 (default 3)
+                       units of h0 (default 4 -- the rim apex reaches
+                       ~3.9*h0 by the end of a real run, so 3 clipped it;
+                       row 1 only needs to show part of the blob, not
+                       resolve it, so no need to match row 2's scale)
   --wide-ny N          Grid rows in the wide-view window (default 200)
   --video              Render PNG frames with plot_fields.py and assemble
                        an mp4 with ffmpeg (needs the elastic-tc-postprocess
@@ -67,11 +89,13 @@ EOF
 CASE_DIR=""
 VISCOELASTIC=0
 WINDOW_LEFT=2.5
-WINDOW_RIGHT=20
-WINDOW_Y=10
+WINDOW_Y_COEF=2.0
+WINDOW_Y_OFFSET=2.0
+WINDOW_RIGHT_COEF=4.0
+WINDOW_RIGHT_OFFSET=6.0
 NY=200
 WIDE_FRACTION=0.5
-WIDE_Y=3
+WIDE_Y=4
 WIDE_NY=200
 VIDEO=0
 FPS=30
@@ -81,8 +105,10 @@ while [[ $# -gt 0 ]]; do
     --case-dir) CASE_DIR="$2"; shift 2 ;;
     --viscoelastic) VISCOELASTIC=1; shift ;;
     --window-left) WINDOW_LEFT="$2"; shift 2 ;;
-    --window-right) WINDOW_RIGHT="$2"; shift 2 ;;
-    --window-y) WINDOW_Y="$2"; shift 2 ;;
+    --window-y-coef) WINDOW_Y_COEF="$2"; shift 2 ;;
+    --window-y-offset) WINDOW_Y_OFFSET="$2"; shift 2 ;;
+    --window-right-coef) WINDOW_RIGHT_COEF="$2"; shift 2 ;;
+    --window-right-offset) WINDOW_RIGHT_OFFSET="$2"; shift 2 ;;
     --ny) NY="$2"; shift 2 ;;
     --wide-fraction) WIDE_FRACTION="$2"; shift 2 ;;
     --wide-y) WIDE_Y="$2"; shift 2 ;;
@@ -114,6 +140,9 @@ MU2="$(get_param_value mu2 "$CASE_DIR/case.params")"
 LDOMAIN="$(get_param_value Ldomain "$CASE_DIR/case.params")"
 [[ -n "$LDOMAIN" ]] || {
   echo "ERROR: Ldomain not found in $CASE_DIR/case.params" >&2; exit 1; }
+XTIP0="$(get_param_value xtip0 "$CASE_DIR/case.params")"
+[[ -n "$XTIP0" ]] || {
+  echo "ERROR: xtip0 not found in $CASE_DIR/case.params" >&2; exit 1; }
 WIDE_XMAX=$(awk -v l="$LDOMAIN" -v f="$WIDE_FRACTION" 'BEGIN{print f*l}')
 
 BUILD_DIR="$SCRIPT_DIR/.build"
@@ -168,18 +197,24 @@ for snap in "${SNAPSHOTS[@]}"; do
   "$BUILD_DIR/get_facets" "$snap_path" > "$FACETS_DIR/snapshot-$tstamp.dat"
 
   # Comoving window is deliberately asymmetric: tight behind the tip (the
-  # gas side carries little extra structure) and wide ahead of it (the rim
-  # grows over the run -- to ~4*h0 radius by the end of a real run -- and
-  # showing the neck settle back to the undisturbed film needs real margin).
+  # gas side carries little extra structure) and adaptive ahead of it and
+  # in y, sized off R_est -- see the usage-header derivation. R_est is a
+  # mass-conservation estimate: liquid swept by the retracting edge
+  # collects into a half-disk of this radius.
+  r_est=$(awk -v x="$xtip" -v x0="$XTIP0" -v h="$H0" \
+    'BEGIN{d=x-x0; if(d<0)d=0; print sqrt(h*d/3.14159265358979)}')
+
   # Clamped to the domain: early in a run the tip sits close to x=0
   # (X0=0), so an unclamped x_tip - W*h0 goes negative and interpolate()
   # returns Basilisk's `nodata` (~1e30) for every point out there, which
   # silently blows up the dissipation colour range.
   xmin=$(awk -v x="$xtip" -v h="$H0" -v w="$WINDOW_LEFT" \
     'BEGIN{v=x-w*h; print (v<0)?0:v}')
-  xmax=$(awk -v x="$xtip" -v h="$H0" -v w="$WINDOW_RIGHT" -v l="$LDOMAIN" \
-    'BEGIN{v=x+w*h; print (v>l)?l:v}')
-  ymax=$(awk -v h="$H0" -v w="$WINDOW_Y" 'BEGIN{print w*h}')
+  xmax=$(awk -v x="$xtip" -v r="$r_est" -v c="$WINDOW_RIGHT_COEF" \
+    -v o="$WINDOW_RIGHT_OFFSET" -v l="$LDOMAIN" \
+    'BEGIN{v=x+c*r+o; print (v>l)?l:v}')
+  ymax=$(awk -v r="$r_est" -v c="$WINDOW_Y_COEF" -v o="$WINDOW_Y_OFFSET" \
+    'BEGIN{print c*r+o}')
   "$BUILD_DIR/get_fields" "$snap_path" "$xmin" "$xmax" 0 "$ymax" "$NY" \
     "$MU1" "$MU2" > "$FIELDS_DIR/snapshot-$tstamp.dat"
 
