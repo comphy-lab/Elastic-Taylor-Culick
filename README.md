@@ -22,8 +22,8 @@ planar semi-infinite sheet -- sharing one constitutive path: the scalar
 │   ├── get_facets.c - Interface segments from a snapshot (output_facets)
 │   ├── get_tip.c - Independent tip position/velocity, recomputed from a
 │   │   snapshot rather than read from the in-code log
-│   ├── get_fields.c - f/u/KAPPA (+ A11..T22 under -DVISCOELASTIC=1)
-│   │   interpolated onto a grid from a snapshot
+│   ├── get_fields.c - f/u/KAPPA/PHI (dissipation) (+ A11..T22 under
+│   │   -DVISCOELASTIC=1) interpolated onto a grid from a snapshot
 │   ├── run_postprocess.sh - Compiles the three above and runs them over a
 │   │   case directory's intermediate/snapshot-* files
 │   └── plot_fields.py - Renders per-snapshot PNG frames and an mp4
@@ -169,12 +169,17 @@ been checked bit-for-bit against the in-code `c<CaseNo>-tip.dat` log across a
 full 81-snapshot run; a mismatch would flag a bug in one of the two
 independent paths.
 
-`get_fields.c` is compiled once plain (`f`, `u.x`, `u.y`, `KAPPA`) and once
-with `-DVISCOELASTIC=1` (adds `A11 A12 A22 T11 T12 T22` from
-`log-conform-viscoelastic-scalar-2D.h`) -- compile the variant matching the
-case a snapshot came from; requesting a field absent from that snapshot reads
-back as exactly zero rather than erroring (`restore()`'s documented behaviour
-for a requested-but-undumped field name).
+`get_fields.c` also computes `PHI`, the viscous dissipation rate per unit
+volume `2*mu*E:E` (`E` the strain-rate tensor), the planar analogue of the
+axisymmetric invariant in `comphy-lab/DropsAtLubis`'s `getData.c` and the
+same reconstruction `Taylor-Culick-FEM/postProcess/animate_planar.py` uses
+for its co-moving FEM cross-check. It is compiled once plain (`f`, `u.x`,
+`u.y`, `KAPPA`, `PHI`) and once with `-DVISCOELASTIC=1` (adds
+`A11 A12 A22 T11 T12 T22` from `log-conform-viscoelastic-scalar-2D.h`) --
+compile the variant matching the case a snapshot came from; requesting a
+field absent from that snapshot reads back as exactly zero rather than
+erroring (`restore()`'s documented behaviour for a requested-but-undumped
+field name).
 
 Run the full pipeline over a case directory:
 
@@ -186,14 +191,30 @@ This compiles the three programs with `qcc -disable-dimensions` (a plain
 post-processing pass over restored data, not a physics solve, so Basilisk's
 dimensional-consistency checker is not relevant here), then for every
 `intermediate/snapshot-*` writes `<run-dir>/postprocess/{tip_snapshots.csv,
-facets/, fields/}`. The field-extraction window auto-follows the tip
-(`--window-behind`/`--window-ahead`/`--window-y`, in units of `h0`) since the
-edge travels O(100) sheet thicknesses over a run and a fixed window would
-either miss the early interface or crop the late one. `--video` additionally
-renders PNG frames and an mp4 via `plot_fields.py`, which needs matplotlib
-and ffmpeg -- both are in the `elastic-tc-postprocess` conda env
-(`conda create -n elastic-tc-postprocess --override-channels -c conda-forge
-python=3.11 numpy matplotlib ffmpeg`).
+facets/, fields/, wide_fields/}`. Two field windows are extracted per
+snapshot: a comoving one centred on the tip (`--window`/`--window-y`, in
+units of `h0`; clamped to `[0, Ldomain]` since early in a run the tip sits
+close to `x=0`), and a wide one fixed at `[0, --wide-fraction * Ldomain]`
+for every snapshot (not tip-tracked -- it shows the domain's own span, not
+a moving window on the rim).
+
+`--video` renders PNG frames and an mp4 via `plot_fields.py`: two panels per
+frame, both mirrored about the midplane `y=0` (the simulated half-domain is
+symmetric, so mirroring shows the physical full-sheet cross-section) --
+velocity magnitude (`Blues`, white at `|u|=0`) over the wide window, and
+`PHI` (`hot_r`, `LogNorm`) over the comoving window, styled after
+`Taylor-Culick-FEM/postProcess/animate_planar.py`. It needs matplotlib,
+ffmpeg and a working system LaTeX (`text.usetex`) -- matplotlib, numpy and
+ffmpeg are in the `elastic-tc-postprocess` conda env (`conda create -n
+elastic-tc-postprocess --override-channels -c conda-forge python=3.11 numpy
+matplotlib ffmpeg`), but LaTeX must come from the system install (`sudo apt
+install texlive-latex-extra texlive-fonts-recommended dvipng cm-super`):
+conda-forge's own `texlive-core` does not ship `latex.ltx` at all, so do not
+`conda install` it into this env -- it would shadow the working
+`/usr/bin/latex` on `PATH` with a package that cannot build `latex.fmt`.
+Pass `--mathtext` to `plot_fields.py` to fall back to matplotlib's
+no-subprocess renderer if this is ever parallelised (LaTeX spawns one
+process per unique string and deadlocks under `multiprocessing`).
 
 ## Phase rheology
 

@@ -3,14 +3,15 @@
 # Post-process one run directory's dump snapshots directly: compile the
 # Basilisk snapshot readers in this folder, then for every
 # intermediate/snapshot-* file extract interface facets, an independent
-# tip-position/velocity cross-check, and a field grid windowed around the
-# retracting tip (the tip moves O(100) sheet thicknesses over a run, so a
-# fixed window would either miss the early interface or crop the late one).
+# tip-position/velocity cross-check, and two field grids: one centred on
+# the retracting tip (moves with it every snapshot) and one over a fixed
+# [0, wide-fraction*Ldomain] span of the domain.
 #
 # Usage:
 #   run_postprocess.sh --case-dir DIR [--viscoelastic]
-#                       [--window-behind N] [--window-ahead N] [--window-y N]
-#                       [--ny N] [--video] [--fps N]
+#                       [--window N] [--window-y N] [--ny N]
+#                       [--wide-fraction F] [--wide-y N] [--wide-ny N]
+#                       [--video] [--fps N]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,13 +29,23 @@ Options:
   --viscoelastic       Also extract A11/A12/A22/T11/T12/T22 (the snapshot
                        must come from TaylorCulickPlanar.c, not the
                        Newtonian-only case)
-  --window-behind N    Field window extent behind the tip, in units of h0
-                       (default 3)
-  --window-ahead N     Field window extent ahead of the tip, in units of h0
-                       (default 1)
-  --window-y N         Field window height above the midplane, in units of
-                       h0 (default 2)
-  --ny N               Grid rows in the field window (default 80)
+  --window N           Comoving field window half-width, centred on the
+                       tip, in units of h0 (default 10) -- window is
+                       [x_tip - N*h0, x_tip + N*h0]
+  --window-y N         Comoving field window height above the midplane, in
+                       units of h0 (default 10)
+  --ny N               Grid rows in the comoving field window (default 200
+                       -- scaled up from window-y=2's original 80 to hold
+                       the same ~0.1*h0 resolution at window-y=10)
+  --wide-fraction F    Wide-view window as a fraction of Ldomain, fixed at
+                       [0, F*Ldomain] for every snapshot (default 0.15 --
+                       0.5 was tried and left the rim a tiny sliver against
+                       mostly undisturbed film; 0.15 keeps the rim a
+                       substantial fraction of the panel while still
+                       showing real upstream context)
+  --wide-y N           Wide-view window height above the midplane, in
+                       units of h0 (default 3)
+  --wide-ny N          Grid rows in the wide-view window (default 200)
   --video              Render PNG frames with plot_fields.py and assemble
                        an mp4 with ffmpeg (needs the elastic-tc-postprocess
                        conda env: matplotlib + ffmpeg)
@@ -45,10 +56,12 @@ EOF
 
 CASE_DIR=""
 VISCOELASTIC=0
-WINDOW_BEHIND=3
-WINDOW_AHEAD=1
-WINDOW_Y=2
-NY=80
+WINDOW=10
+WINDOW_Y=10
+NY=200
+WIDE_FRACTION=0.15
+WIDE_Y=3
+WIDE_NY=200
 VIDEO=0
 FPS=30
 
@@ -56,10 +69,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --case-dir) CASE_DIR="$2"; shift 2 ;;
     --viscoelastic) VISCOELASTIC=1; shift ;;
-    --window-behind) WINDOW_BEHIND="$2"; shift 2 ;;
-    --window-ahead) WINDOW_AHEAD="$2"; shift 2 ;;
+    --window) WINDOW="$2"; shift 2 ;;
     --window-y) WINDOW_Y="$2"; shift 2 ;;
     --ny) NY="$2"; shift 2 ;;
+    --wide-fraction) WIDE_FRACTION="$2"; shift 2 ;;
+    --wide-y) WIDE_Y="$2"; shift 2 ;;
+    --wide-ny) WIDE_NY="$2"; shift 2 ;;
     --video) VIDEO=1; shift ;;
     --fps) FPS="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -80,6 +95,14 @@ QCC="$(which qcc || true)"
 
 H0="$(get_param_value h0 "$CASE_DIR/case.params")"
 H0="${H0:-1.0}"
+MU1="$(get_param_value mu1 "$CASE_DIR/case.params")"
+MU2="$(get_param_value mu2 "$CASE_DIR/case.params")"
+[[ -n "$MU1" && -n "$MU2" ]] || {
+  echo "ERROR: mu1/mu2 not found in $CASE_DIR/case.params" >&2; exit 1; }
+LDOMAIN="$(get_param_value Ldomain "$CASE_DIR/case.params")"
+[[ -n "$LDOMAIN" ]] || {
+  echo "ERROR: Ldomain not found in $CASE_DIR/case.params" >&2; exit 1; }
+WIDE_XMAX=$(awk -v l="$LDOMAIN" -v f="$WIDE_FRACTION" 'BEGIN{print f*l}')
 
 BUILD_DIR="$SCRIPT_DIR/.build"
 mkdir -p "$BUILD_DIR"
@@ -106,7 +129,8 @@ echo "Compiling postprocessors with $QCC ..."
 OUT_DIR="$CASE_DIR/postprocess"
 FACETS_DIR="$OUT_DIR/facets"
 FIELDS_DIR="$OUT_DIR/fields"
-mkdir -p "$FACETS_DIR" "$FIELDS_DIR"
+WIDE_DIR="$OUT_DIR/wide_fields"
+mkdir -p "$FACETS_DIR" "$FIELDS_DIR" "$WIDE_DIR"
 TIP_CSV="$OUT_DIR/tip_snapshots.csv"
 echo "t,x_tip,x_tip_vof,x_tip_global,u_tip_x" > "$TIP_CSV"
 
@@ -131,14 +155,25 @@ for snap in "${SNAPSHOTS[@]}"; do
 
   "$BUILD_DIR/get_facets" "$snap_path" > "$FACETS_DIR/snapshot-$tstamp.dat"
 
-  xmin=$(awk -v x="$xtip" -v h="$H0" -v w="$WINDOW_BEHIND" 'BEGIN{print x-w*h}')
-  xmax=$(awk -v x="$xtip" -v h="$H0" -v w="$WINDOW_AHEAD" 'BEGIN{print x+w*h}')
+  # Comoving window is centred on the tip -- symmetric, not skewed toward
+  # either side. Clamped to the domain: early in a run the tip sits close
+  # to x=0 (X0=0), so an unclamped x_tip - W*h0 goes negative and
+  # interpolate() returns Basilisk's `nodata` (~1e30) for every point out
+  # there, which silently blows up the dissipation colour range.
+  xmin=$(awk -v x="$xtip" -v h="$H0" -v w="$WINDOW" 'BEGIN{v=x-w*h; print (v<0)?0:v}')
+  xmax=$(awk -v x="$xtip" -v h="$H0" -v w="$WINDOW" -v l="$LDOMAIN" \
+    'BEGIN{v=x+w*h; print (v>l)?l:v}')
   ymax=$(awk -v h="$H0" -v w="$WINDOW_Y" 'BEGIN{print w*h}')
   "$BUILD_DIR/get_fields" "$snap_path" "$xmin" "$xmax" 0 "$ymax" "$NY" \
-    > "$FIELDS_DIR/snapshot-$tstamp.dat"
+    "$MU1" "$MU2" > "$FIELDS_DIR/snapshot-$tstamp.dat"
+
+  # Wide view is a fixed [0, wide-fraction*Ldomain] window, not tip-tracked.
+  wide_ymax=$(awk -v h="$H0" -v w="$WIDE_Y" 'BEGIN{print w*h}')
+  "$BUILD_DIR/get_fields" "$snap_path" 0 "$WIDE_XMAX" 0 "$wide_ymax" \
+    "$WIDE_NY" "$MU1" "$MU2" > "$WIDE_DIR/snapshot-$tstamp.dat"
 done
 
-echo "Wrote $TIP_CSV, $FACETS_DIR/, $FIELDS_DIR/"
+echo "Wrote $TIP_CSV, $FACETS_DIR/, $FIELDS_DIR/, $WIDE_DIR/"
 
 if [[ "$VIDEO" -eq 1 ]]; then
   echo "Rendering frames and assembling video ..."
