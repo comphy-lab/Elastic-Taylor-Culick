@@ -64,6 +64,7 @@ def configure_typography(mathtext: bool) -> None:
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.collections import LineCollection  # noqa: E402
 from matplotlib.colors import LogNorm  # noqa: E402
+from matplotlib.patches import Rectangle  # noqa: E402
 import numpy as np  # noqa: E402
 
 V_TC = np.sqrt(2.0)
@@ -214,6 +215,15 @@ def render_frame(facets_file: str, wide_file: str, comoving_file: str,
     mirrored_panel(ax_wide, cax_wide, wide, segments, umag_wide, "Blues",
                     dict(vmin=0.0, vmax=1.0),
                     r"$|u|\,/\,V_{\mathrm{TC}}$", time_label=t_label)
+
+    # Mark row 2's comoving window on row 1, so the two panels' relationship
+    # stays legible even when the rim is a small feature of the wide view.
+    com_xmin, com_xmax = com["x"].min(), com["x"].max()
+    com_ymax = com["y"].max()
+    ax_wide.add_patch(Rectangle(
+        (com_xmin, -com_ymax), com_xmax - com_xmin, 2 * com_ymax,
+        facecolor="none", edgecolor="0.4", linewidth=1.5,
+        linestyle=(0, (4, 3)), zorder=7))
 
     mirrored_panel(ax_com, cax_com, com, segments, com["phi"], "hot_r",
                     dict(norm=LogNorm(*phi_lim)),

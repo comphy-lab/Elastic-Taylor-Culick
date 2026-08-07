@@ -38,11 +38,12 @@ Options:
                        -- scaled up from window-y=2's original 80 to hold
                        the same ~0.1*h0 resolution at window-y=10)
   --wide-fraction F    Wide-view window as a fraction of Ldomain, fixed at
-                       [0, F*Ldomain] for every snapshot (default 0.15 --
-                       0.5 was tried and left the rim a tiny sliver against
-                       mostly undisturbed film; 0.15 keeps the rim a
-                       substantial fraction of the panel while still
-                       showing real upstream context)
+                       [0, F*Ldomain] for every snapshot (default 0.5 -- the
+                       point of row 1 is the whole domain's air flow over
+                       the run, not a close-up of the rim; row 2's comoving
+                       window is marked on row 1 with a grey box so the two
+                       panels' relationship stays legible even when the rim
+                       is a small feature of row 1)
   --wide-y N           Wide-view window height above the midplane, in
                        units of h0 (default 3)
   --wide-ny N          Grid rows in the wide-view window (default 200)
@@ -59,7 +60,7 @@ VISCOELASTIC=0
 WINDOW=10
 WINDOW_Y=10
 NY=200
-WIDE_FRACTION=0.15
+WIDE_FRACTION=0.5
 WIDE_Y=3
 WIDE_NY=200
 VIDEO=0
