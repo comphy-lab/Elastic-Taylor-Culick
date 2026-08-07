@@ -12,10 +12,12 @@ obtained from a local first-order least-squares (Savitzky-Golay) slope over a
 window of ``--window`` samples, which is far less noisy than a bare two-point
 difference at the sub-cell scale of the VOF reconstruction.
 
-Non-dimensionalisation: rho = sigma = h0 = 1 with h0 the FULL sheet thickness,
-so V_TC = sqrt(2).  Savva & Bush (JFM 626, 2009) use the half-thickness, so a
-case quoted at Oh_SB is run with mu = sqrt(2) * Oh_SB; their viscous time is
-tau_vis = mu/2 and their reduced time is t* = t / tau_vis.
+Non-dimensionalisation: rho = sigma = h0 = 1 with h0 the FULL sheet thickness
+gives V_TC = sqrt(2); the tip log header records the run's actual
+V_TC = sqrt(2*sigma/(rho1*h0)), which this script parses rather than
+assuming rho1 = h0 = 1.  Savva & Bush (JFM 626, 2009) use the half-thickness,
+so a case quoted at Oh_SB is run with mu = sqrt(2) * Oh_SB; their viscous time
+is tau_vis = mu/2 and their reduced time is t* = t / tau_vis.
 
 Usage
 -----
@@ -32,7 +34,7 @@ import sys
 
 import numpy as np
 
-V_TC = math.sqrt(2.0)
+FALLBACK_V_TC = math.sqrt(2.0)
 
 
 def find_tip_file(path: str) -> str:
@@ -48,13 +50,19 @@ def find_tip_file(path: str) -> str:
 
 
 def read_tip(fname: str):
-    """Return (t, x_tip, x_tip_vof, tau_vis) from a tip log."""
+    """Return (t, x_tip, x_tip_vof, tau_vis, v_tc) from a tip log.
+
+    ``v_tc`` is ``None`` if the header predates the ``V_TC`` field, in which
+    case the caller must fall back to the rho1 = h0 = 1 default.
+    """
     tau_vis = None
+    v_tc = None
     with open(fname) as fh:
         for line in fh:
             if line.startswith("#") and "tau_vis" in line and "V_TC" in line:
                 parts = line.replace("#", "").split()
                 tau_vis = float(parts[parts.index("tau_vis") + 1])
+                v_tc = float(parts[parts.index("V_TC") + 1])
                 break
     data = np.loadtxt(fname, comments="#")
     if data.ndim == 1:
@@ -68,7 +76,7 @@ def read_tip(fname: str):
         tstar = data[:, 1]
         with np.errstate(divide="ignore", invalid="ignore"):
             tau_vis = float(np.nanmedian(np.where(tstar > 0, t / tstar, np.nan)))
-    return t, x_tip, x_vof, tau_vis
+    return t, x_tip, x_vof, tau_vis, v_tc
 
 
 def savgol_slope(t: np.ndarray, x: np.ndarray, window: int) -> np.ndarray:
@@ -110,7 +118,12 @@ def main() -> int:
     case_dir = os.path.dirname(os.path.abspath(tip_file))
     out = args.output or os.path.join(case_dir, "tip_velocity.csv")
 
-    t, x_tip, x_vof, tau_vis = read_tip(tip_file)
+    t, x_tip, x_vof, tau_vis, v_tc = read_tip(tip_file)
+    if v_tc is None:
+        print(f"warning: {tip_file}: no V_TC in header, "
+              f"falling back to rho1 = h0 = 1 default ({FALLBACK_V_TC:.6g})",
+              file=sys.stderr)
+        v_tc = FALLBACK_V_TC
 
     # Drop duplicated times (a restart can repeat the last recorded sample).
     keep = np.concatenate(([True], np.diff(t) > 0))
@@ -123,14 +136,14 @@ def main() -> int:
         fh.write("t,tstar,x_tip,v_tip,v_over_VTC\n")
         for k in range(len(t)):
             fh.write("%.8e,%.8e,%.8e,%.8e,%.8e\n"
-                     % (t[k], tstar[k], x_tip[k], v_tip[k], v_tip[k] / V_TC))
+                     % (t[k], tstar[k], x_tip[k], v_tip[k], v_tip[k] / v_tc))
 
     dev = np.max(np.abs(x_tip - x_vof))
     print(f"{tip_file} -> {out}")
     print(f"  samples {len(t)}  t in [{t[0]:.4g}, {t[-1]:.4g}]  "
-          f"tau_vis {tau_vis:.6g}")
+          f"tau_vis {tau_vis:.6g}  V_TC {v_tc:.6g}")
     print(f"  x_tip final {x_tip[-1]:.6g}  v_tip final {v_tip[-1]:.6g}  "
-          f"v/V_TC final {v_tip[-1] / V_TC:.6g}")
+          f"v/V_TC final {v_tip[-1] / v_tc:.6g}")
     print(f"  max |x_tip - x_tip_vof| = {dev:.3g} "
           f"(large values flag rim pinch-off or midplane bubble entrainment)")
     return 0

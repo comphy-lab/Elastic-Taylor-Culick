@@ -250,9 +250,14 @@ event init (t = 0)
     `Ldomain = 128` and `MINlevel = 6` this put the edge at `x = 1.573`
     instead of `x = xtip0 = 1`.  Testing the cell's lower edge instead of
     its centre makes the pre-refinement independent of `MINlevel`.
+
+    The padding beyond `h0/2` is a fraction of `h0` itself (not a fixed
+    `0.1`), so the band stays proportionate to the sheet thickness whether
+    `h0` is 1 or 0.1.
     */
-    refine(y - Delta < h0/2. + 0.1 && level < MAXlevel - 3);
-    refine(x - Delta < xc + 2.*h0 && y - Delta < h0/2. + 0.1 &&
+    const double pad = 0.1*h0;
+    refine(y - Delta < h0/2. + pad && level < MAXlevel - 3);
+    refine(x - Delta < xc + 2.*h0 && y - Delta < h0/2. + pad &&
            level < MAXlevel);
     fraction(f, x < xc
              ? sq(h0/2.) - (sq(x - xc) + sq(y))
@@ -340,6 +345,9 @@ event tip_output (t = 0.; t += tout)
               xtip, xvof, xtipglobal);
       fclose(fp);
     }
+    else
+      fprintf(stderr, "tip_output: failed to open %s at t = %g, "
+                       "sample dropped\n", tipFile, t);
   }
 }
 
