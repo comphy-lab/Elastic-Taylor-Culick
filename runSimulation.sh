@@ -15,6 +15,9 @@ Compile and run one Taylor--Culick case.
 Options:
   --case FILE       Case source (default: simulationCases/TaylorCulick.c)
   --input FILE      Parameter file (default: default.params)
+  --outdir DIR      Run directory (default: simulationCases/c<CaseNo>).
+                    Use this to keep run data out of the checkout.
+  --openmp          Compile with -fopenmp (honours OMP_NUM_THREADS)
   --compile-only    Compile the case but do not execute it
   --dry-run         Print the case contract without changing files
   -h, --help        Show this help
@@ -34,6 +37,8 @@ resolve_path() {
 
 CASE_FILE="simulationCases/TaylorCulick.c"
 PARAM_FILE="default.params"
+OUT_DIR=""
+OPENMP=0
 COMPILE_ONLY=0
 DRY_RUN=0
 
@@ -49,6 +54,12 @@ while [[ $# -gt 0 ]]; do
       PARAM_FILE="$2"
       shift 2
       ;;
+    --outdir)
+      [[ $# -ge 2 ]] || { echo "ERROR: --outdir needs a directory." >&2; exit 1; }
+      OUT_DIR="$2"
+      shift 2
+      ;;
+    --openmp) OPENMP=1; shift ;;
     --compile-only) COMPILE_ONLY=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -71,7 +82,12 @@ if [[ ! "$CASE_NO" =~ ^[0-9]+$ || "$CASE_NO" -lt 1000 ]]; then
   exit 1
 fi
 
-CASE_DIR="$SCRIPT_DIR/simulationCases/c$CASE_NO"
+if [[ -n "$OUT_DIR" ]]; then
+  mkdir -p "$OUT_DIR"
+  CASE_DIR="$(cd "$OUT_DIR" && pwd)"
+else
+  CASE_DIR="$SCRIPT_DIR/simulationCases/c$CASE_NO"
+fi
 CASE_NAME="$(basename "$CASE_SOURCE" .c)"
 LOCAL_SOURCE="$CASE_DIR/$CASE_NAME.c"
 EXECUTABLE="$CASE_DIR/$CASE_NAME"
@@ -97,10 +113,15 @@ mkdir -p "$CASE_DIR"
 cp "$CASE_SOURCE" "$LOCAL_SOURCE"
 cp "$PARAM_SOURCE" "$LOCAL_PARAMS"
 
-echo "Compiling with: $QCC_BIN -O2 -Wall -disable-dimensions"
+QCC_FLAGS=(-O2 -Wall -disable-dimensions)
+if [[ "$OPENMP" -eq 1 ]]; then
+  QCC_FLAGS+=(-fopenmp)
+fi
+
+echo "Compiling with: $QCC_BIN ${QCC_FLAGS[*]}"
 (
   cd "$CASE_DIR"
-  "$QCC_BIN" -O2 -Wall -disable-dimensions \
+  "$QCC_BIN" "${QCC_FLAGS[@]}" \
     -I"$SCRIPT_DIR/src-local" "$CASE_NAME.c" -o "$CASE_NAME" -lm
 )
 
