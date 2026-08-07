@@ -7,14 +7,17 @@
 # the retracting tip (moves with it every snapshot) and one over a fixed
 # [0, wide-fraction*Ldomain] span of the domain.
 #
-# The comoving window's y-extent and right (ahead-of-tip) extent scale with
-# the rim, not a fixed h0 multiple -- see the R_est derivation below.
+# The comoving window is always an exact square centred on the tip, with
+# half-width scaled off the rim -- see the R_est derivation below. A fixed
+# 1:1 data aspect every snapshot is load-bearing, not cosmetic: plot_fields.py
+# derives the comoving panel's PIXEL SIZE from the data aspect ratio, so a
+# window whose shape changes frame to frame produces a differently-sized PNG
+# every frame -- ffmpeg then either fails or produces a visibly jumpy video.
+# Squaring it makes the panel size constant by construction.
 #
 # Usage:
 #   run_postprocess.sh --case-dir DIR [--viscoelastic]
-#                       [--window-left N] [--window-y-coef N]
-#                       [--window-y-offset N] [--window-right-coef N]
-#                       [--window-right-offset N] [--ny N]
+#                       [--window-coef N] [--window-offset N] [--ny N]
 #                       [--wide-fraction F] [--wide-y N] [--wide-ny N]
 #                       [--video] [--fps N]
 set -euo pipefail
@@ -34,34 +37,33 @@ Options:
   --viscoelastic       Also extract A11/A12/A22/T11/T12/T22 (the snapshot
                        must come from TaylorCulickPlanar.c, not the
                        Newtonian-only case)
-  --window-left N      Comoving field window extent behind the tip, in
-                       units of h0 (default 2.5) -- the gas side carries
-                       little extra structure past a small margin, so this
-                       stays fixed rather than scaling with the rim, unlike
-                       the window ahead of the tip
-  --window-y-coef N    Comoving window half-height = coef*R_est + offset,
-                       in units of h0 (default coef 2.0, offset 2.0)
-  --window-y-offset N
-  --window-right-coef N
-                       Comoving window extent ahead of the tip =
-                       coef*R_est + offset, in units of h0 (default coef
-                       4.0, offset 6.0)
-  --window-right-offset N
-                       R_est = sqrt(h0*(x_tip - xtip0)/pi) is a mass-
-                       conservation estimate of the rim's radius: the
-                       liquid swept by the retracting edge (h0*(x_tip -
-                       xtip0) per unit span, upper half only) is assumed to
-                       collect into a half-disk of radius R_est. Checked
-                       against a real run's measured rim apex height and
-                       neck-to-film reflattening distance at t=10/20/30/40:
-                       apex height tracks R_est to within 11% (3% by
-                       t=40), and reflattening distance fits
-                       2.87*R_est+4.91 (R^2~1) almost exactly -- the
-                       defaults above are that fit plus ~30-40% margin.
+  --window-coef N      Comoving window half-width W = coef*R_est + offset,
+                       in units of h0, applied symmetrically as
+                       [x_tip - W, x_tip + W] x [-W, W] (default coef 1.8)
+  --window-offset N    (default offset 2.0) -- R_est =
+                       sqrt(h0*(x_tip - xtip0)/pi) is a mass-conservation
+                       estimate of the rim's radius: the liquid swept by
+                       the retracting edge (h0*(x_tip - xtip0) per unit
+                       span, upper half only) is assumed to collect into a
+                       half-disk of radius R_est. Checked against a real
+                       run's measured rim apex height at t=10/20/30/40:
+                       tracks R_est to within 11% (3% by t=40). Coef/offset
+                       are tuned so the blob fills a substantial, roughly
+                       constant fraction of the square at every time (a
+                       wider window showed more of the neck-to-film
+                       reflattening but made the blob look lost in mostly-
+                       white canvas, worsened by hot_r's low end being
+                       near-white with no axis border to give scale).
                        R_est needs no smoothing (it is a monotonic function
                        of x_tip, already smooth) and degrades gracefully at
-                       t=0 (R_est=0, so the offsets alone set the window),
-                       so no separate floor logic is needed.
+                       t=0 (R_est=0, so the offset alone sets the window),
+                       so no separate floor logic is needed. Not clamped to
+                       the domain: an unclamped x_tip - W*h0 can go
+                       negative early in a run, but interpolate() returns
+                       Basilisk's `nodata` (~1e30) for points outside the
+                       domain rather than erroring, and plot_fields.py
+                       masks that to NaN -- clamping would break the exact
+                       symmetry the fixed panel size depends on.
   --ny N               Grid rows in the comoving field window (default 200
                        -- scaled up from the original 80 to hold ~0.1*h0
                        resolution at the larger comoving windows)
@@ -88,11 +90,8 @@ EOF
 
 CASE_DIR=""
 VISCOELASTIC=0
-WINDOW_LEFT=2.5
-WINDOW_Y_COEF=2.0
-WINDOW_Y_OFFSET=2.0
-WINDOW_RIGHT_COEF=4.0
-WINDOW_RIGHT_OFFSET=6.0
+WINDOW_COEF=1.8
+WINDOW_OFFSET=2.0
 NY=200
 WIDE_FRACTION=0.5
 WIDE_Y=4
@@ -104,11 +103,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --case-dir) CASE_DIR="$2"; shift 2 ;;
     --viscoelastic) VISCOELASTIC=1; shift ;;
-    --window-left) WINDOW_LEFT="$2"; shift 2 ;;
-    --window-y-coef) WINDOW_Y_COEF="$2"; shift 2 ;;
-    --window-y-offset) WINDOW_Y_OFFSET="$2"; shift 2 ;;
-    --window-right-coef) WINDOW_RIGHT_COEF="$2"; shift 2 ;;
-    --window-right-offset) WINDOW_RIGHT_OFFSET="$2"; shift 2 ;;
+    --window-coef) WINDOW_COEF="$2"; shift 2 ;;
+    --window-offset) WINDOW_OFFSET="$2"; shift 2 ;;
     --ny) NY="$2"; shift 2 ;;
     --wide-fraction) WIDE_FRACTION="$2"; shift 2 ;;
     --wide-y) WIDE_Y="$2"; shift 2 ;;
@@ -196,26 +192,19 @@ for snap in "${SNAPSHOTS[@]}"; do
 
   "$BUILD_DIR/get_facets" "$snap_path" > "$FACETS_DIR/snapshot-$tstamp.dat"
 
-  # Comoving window is deliberately asymmetric: tight behind the tip (the
-  # gas side carries little extra structure) and adaptive ahead of it and
-  # in y, sized off R_est -- see the usage-header derivation. R_est is a
-  # mass-conservation estimate: liquid swept by the retracting edge
-  # collects into a half-disk of this radius.
+  # Comoving window: exact square, tip exactly centred -- see the
+  # usage-header derivation. R_est is a mass-conservation estimate: liquid
+  # swept by the retracting edge collects into a half-disk of this radius.
+  # Deliberately NOT clamped to the domain: clamping only one side would
+  # break the exact tip-centred symmetry the fixed panel size depends on
+  # (see usage header for why interpolate() going out of domain is safe).
   r_est=$(awk -v x="$xtip" -v x0="$XTIP0" -v h="$H0" \
     'BEGIN{d=x-x0; if(d<0)d=0; print sqrt(h*d/3.14159265358979)}')
-
-  # Clamped to the domain: early in a run the tip sits close to x=0
-  # (X0=0), so an unclamped x_tip - W*h0 goes negative and interpolate()
-  # returns Basilisk's `nodata` (~1e30) for every point out there, which
-  # silently blows up the dissipation colour range.
-  xmin=$(awk -v x="$xtip" -v h="$H0" -v w="$WINDOW_LEFT" \
-    'BEGIN{v=x-w*h; print (v<0)?0:v}')
-  xmax=$(awk -v x="$xtip" -v r="$r_est" -v c="$WINDOW_RIGHT_COEF" \
-    -v o="$WINDOW_RIGHT_OFFSET" -v l="$LDOMAIN" \
-    'BEGIN{v=x+c*r+o; print (v>l)?l:v}')
-  ymax=$(awk -v r="$r_est" -v c="$WINDOW_Y_COEF" -v o="$WINDOW_Y_OFFSET" \
+  w=$(awk -v r="$r_est" -v c="$WINDOW_COEF" -v o="$WINDOW_OFFSET" \
     'BEGIN{print c*r+o}')
-  "$BUILD_DIR/get_fields" "$snap_path" "$xmin" "$xmax" 0 "$ymax" "$NY" \
+  xmin=$(awk -v x="$xtip" -v w="$w" 'BEGIN{print x-w}')
+  xmax=$(awk -v x="$xtip" -v w="$w" 'BEGIN{print x+w}')
+  "$BUILD_DIR/get_fields" "$snap_path" "$xmin" "$xmax" 0 "$w" "$NY" \
     "$MU1" "$MU2" > "$FIELDS_DIR/snapshot-$tstamp.dat"
 
   # Wide view is a fixed [0, wide-fraction*Ldomain] window, not tip-tracked.

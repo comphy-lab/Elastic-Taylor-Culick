@@ -9,9 +9,20 @@ mirroring shows the physical full sheet cross-section):
   wide       velocity magnitude (`Blues`, white at |u|=0 -- the
              `DropsAtLubis`/`Basilisk-101` convention) over the fixed
              `[0, wide-fraction*Ldomain]` window `run_postprocess.sh` wrote.
+             Kept fully labelled (axes, ticks, colorbar).
   comoving   viscous dissipation rate per unit volume (`hot_r`, `LogNorm`
              on the raw value -- `get_fields` writes raw PHI for exactly
-             this reason) over the window centred on the tip.
+             this reason) over an exact square window centred on the tip,
+             sized off the rim (see run_postprocess.sh). Deliberately bare
+             -- no axes/ticks/spines, no marker box on row 1 -- so the two
+             rows are compared directly through the size of the blob;
+             only the colorbar and the time label remain.
+
+The comoving window's fixed 1:1 data aspect (guaranteed by
+run_postprocess.sh's exact tip-centred square) is why the video doesn't
+jump between frames: this script derives the comoving panel's PIXEL size
+from the data aspect ratio, so a window whose shape changed frame to frame
+used to produce a differently-sized PNG every frame.
 
 Styling (colormaps, LogNorm dissipation, magenta interface, horizontal
 top colorbar) matches
@@ -64,7 +75,6 @@ def configure_typography(mathtext: bool) -> None:
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.collections import LineCollection  # noqa: E402
 from matplotlib.colors import LogNorm  # noqa: E402
-from matplotlib.patches import Rectangle  # noqa: E402
 import numpy as np  # noqa: E402
 
 V_TC = np.sqrt(2.0)
@@ -131,9 +141,14 @@ def phi_range(phi: np.ndarray) -> tuple[float, float]:
 
 
 def mirrored_panel(ax, cax, cols, segments, values, cmap, norm_kwargs,
-                    cbar_label, time_label=None):
+                    cbar_label, time_label=None, decorate=True):
     """Plot ``values`` mirrored about y=0 on both halves of ``ax``, with a
-    single horizontal colorbar on ``cax`` above it."""
+    single horizontal colorbar on ``cax`` above it.
+
+    ``decorate=False`` drops axis labels/ticks/spines entirely (``ax.axis
+    ("off")``) for a clean, full-bleed panel -- used for the comoving row,
+    where the point is comparing blob size across frames, not reading off
+    axis values (the colorbar stays either way)."""
     mesh = ax.pcolormesh(cols["x"], cols["y"], values, cmap=cmap,
                           shading="gouraud", **norm_kwargs)
     ax.pcolormesh(cols["x"], -cols["y"], values, cmap=cmap,
@@ -148,12 +163,15 @@ def mirrored_panel(ax, cax, cols, segments, values, cmap, norm_kwargs,
     ax.set_xlim(cols["x"].min(), cols["x"].max())
     ax.set_ylim(-cols["y"].max(), cols["y"].max())
     ax.set_aspect("equal")
-    ax.set_xlabel(r"$x/h_0$", fontsize=24, labelpad=7)
-    ax.set_ylabel(r"$y/h_0$", fontsize=24, labelpad=7)
-    ax.tick_params(which="both", direction="out", width=2, labelsize=18,
-                    pad=5)
-    for sp in ax.spines.values():
-        sp.set_linewidth(2)
+    if decorate:
+        ax.set_xlabel(r"$x/h_0$", fontsize=24, labelpad=7)
+        ax.set_ylabel(r"$y/h_0$", fontsize=24, labelpad=7)
+        ax.tick_params(which="both", direction="out", width=2, labelsize=18,
+                        pad=5)
+        for sp in ax.spines.values():
+            sp.set_linewidth(2)
+    else:
+        ax.axis("off")
 
     if time_label is not None:
         box = dict(boxstyle="round,pad=0.28", fc="k", ec="none", alpha=0.55)
@@ -193,7 +211,7 @@ def render_frame(facets_file: str, wide_file: str, comoving_file: str,
     cb_h = 0.30
     row_gap = 1.55                              # clears row 1's x tick/label
     gap_hi = 0.32                               # colorbar sits just above
-    mb, mt = 1.10, 0.30
+    mb, mt = 0.35, 0.30                         # row 2 has no x-label below it
 
     FW = ml + PW + mr
     FH = mt + cb_h + gap_hi + RH1 + row_gap + cb_h + gap_hi + RH2 + mb
@@ -216,19 +234,12 @@ def render_frame(facets_file: str, wide_file: str, comoving_file: str,
                     dict(vmin=0.0, vmax=1.0),
                     r"$|u|\,/\,V_{\mathrm{TC}}$", time_label=t_label)
 
-    # Mark row 2's comoving window on row 1, so the two panels' relationship
-    # stays legible even when the rim is a small feature of the wide view.
-    com_xmin, com_xmax = com["x"].min(), com["x"].max()
-    com_ymax = com["y"].max()
-    ax_wide.add_patch(Rectangle(
-        (com_xmin, -com_ymax), com_xmax - com_xmin, 2 * com_ymax,
-        facecolor="none", edgecolor="0.4", linewidth=1.5,
-        linestyle=(0, (4, 3)), zorder=7))
-
+    # No marker box on row 1 for row 2's window: the two rows are compared
+    # directly through the blob's size instead.
     mirrored_panel(ax_com, cax_com, com, segments, com["phi"], "hot_r",
                     dict(norm=LogNorm(*phi_lim)),
                     r"$\varepsilon\,/\,(\sigma/h_0)\sqrt{\sigma/\rho h_0}$",
-                    time_label=t_label)
+                    time_label=t_label, decorate=False)
 
     fig.savefig(out_png, dpi=140)
     plt.close(fig)
