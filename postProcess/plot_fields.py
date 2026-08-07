@@ -140,25 +140,51 @@ def phi_range(phi: np.ndarray) -> tuple[float, float]:
     return (max(hi * 1e-4, 1e-8), hi)
 
 
+def pad_to_midplane(x: np.ndarray, y: np.ndarray, values: np.ndarray):
+    """Prepend a synthetic y=0 row, duplicating each row's nearest real
+    sample (index 0, at y=dy/2).
+
+    `get_fields.c` samples y cell-centred (`y = dy*(j+0.5)`), so the first
+    real row sits at y=dy/2, not y=0. `shading="gouraud"` colours vertices,
+    not cells, and does not extrapolate past the given points, so plotting
+    the upper half at `y` and the mirrored lower half at `-y` each stop
+    dy/2 short of the midplane -- an undrawn white sliver of width dy right
+    where the two halves should meet. Duplicating row 0 at y=0 exactly is
+    not just a cosmetic patch: the symmetry boundary condition makes
+    d(field)/dy = 0 at y=0 by construction, so the field is flat to first
+    order near the midplane and the nearest sample is accurate to O(dy^2).
+    """
+    x0 = x[:, :1]
+    y0 = np.zeros_like(y[:, :1])
+    v0 = values[:, :1]
+    return (np.concatenate([x0, x], axis=1),
+            np.concatenate([y0, y], axis=1),
+            np.concatenate([v0, values], axis=1))
+
+
 def mirrored_panel(ax, cax, cols, segments, values, cmap, norm_kwargs,
-                    cbar_label, time_label=None, decorate=True):
+                    cbar_label, time_label=None, decorate=True,
+                    show_midline=True):
     """Plot ``values`` mirrored about y=0 on both halves of ``ax``, with a
     single horizontal colorbar on ``cax`` above it.
 
     ``decorate=False`` drops axis labels/ticks/spines entirely (``ax.axis
     ("off")``) for a clean, full-bleed panel -- used for the comoving row,
     where the point is comparing blob size across frames, not reading off
-    axis values (the colorbar stays either way)."""
-    mesh = ax.pcolormesh(cols["x"], cols["y"], values, cmap=cmap,
-                          shading="gouraud", **norm_kwargs)
-    ax.pcolormesh(cols["x"], -cols["y"], values, cmap=cmap,
-                   shading="gouraud", **norm_kwargs)
+    axis values (the colorbar stays either way). ``show_midline=False``
+    drops the dashed y=0 symmetry line -- also comoving-row-only, at
+    Vatsal's request."""
+    xp, yp, vp = pad_to_midplane(cols["x"], cols["y"], values)
+    mesh = ax.pcolormesh(xp, yp, vp, cmap=cmap, shading="gouraud",
+                          **norm_kwargs)
+    ax.pcolormesh(xp, -yp, vp, cmap=cmap, shading="gouraud", **norm_kwargs)
 
     mirrored = [np.column_stack([s[:, 0], -s[:, 1]]) for s in segments]
     ax.add_collection(LineCollection(segments + mirrored,
                                       colors=INTERFACE_COLOR, linewidths=1.6,
                                       zorder=5, capstyle="round"))
-    ax.axhline(0.0, color="0.45", lw=1.0, ls=(0, (6, 4)), zorder=6)
+    if show_midline:
+        ax.axhline(0.0, color="0.45", lw=1.0, ls=(0, (6, 4)), zorder=6)
 
     ax.set_xlim(cols["x"].min(), cols["x"].max())
     ax.set_ylim(-cols["y"].max(), cols["y"].max())
@@ -211,7 +237,10 @@ def render_frame(facets_file: str, wide_file: str, comoving_file: str,
     cb_h = 0.30
     row_gap = 1.55                              # clears row 1's x tick/label
     gap_hi = 0.32                               # colorbar sits just above
-    mb, mt = 0.35, 0.30                         # row 2 has no x-label below it
+    # mt must fit row 1's colorbar's top-positioned tick labels (17pt) AND
+    # axis label (22pt, labelpad=10pt) stacked above cax_wide -- ~0.73in
+    # needed; 0.30in clipped the axis label against the figure's top edge.
+    mb, mt = 0.35, 0.85
 
     FW = ml + PW + mr
     FH = mt + cb_h + gap_hi + RH1 + row_gap + cb_h + gap_hi + RH2 + mb
@@ -239,7 +268,7 @@ def render_frame(facets_file: str, wide_file: str, comoving_file: str,
     mirrored_panel(ax_com, cax_com, com, segments, com["phi"], "hot_r",
                     dict(norm=LogNorm(*phi_lim)),
                     r"$\varepsilon\,/\,(\sigma/h_0)\sqrt{\sigma/\rho h_0}$",
-                    time_label=t_label, decorate=False)
+                    time_label=t_label, decorate=False, show_midline=False)
 
     fig.savefig(out_png, dpi=140)
     plt.close(fig)
@@ -269,24 +298,36 @@ def main() -> int:
     frames_dir = os.path.join(pp_dir, "frames")
     os.makedirs(frames_dir, exist_ok=True)
 
-    fields_files = sorted(glob.glob(os.path.join(fields_dir, "snapshot-*.dat")))
+    # Sort by the NUMERIC value of the timestamp, not the filename string:
+    # "snapshot-19.5000.dat" < "snapshot-2.0000.dat" lexicographically (the
+    # leading '1' beats '2'), and ffmpeg's own `-pattern_type glob` sorts its
+    # matches the same (wrong) way -- output filenames below use a
+    # zero-padded sequence index for exactly this reason, not the timestamp.
+    fields_files = glob.glob(os.path.join(fields_dir, "snapshot-*.dat"))
     if not fields_files:
         raise SystemExit(f"no snapshot-*.dat under {fields_dir}; "
                           f"run run_postprocess.sh first")
+    fields_files = sorted(
+        fields_files,
+        key=lambda f: float(os.path.basename(f)[len("snapshot-"):-len(".dat")]))
 
-    for fields_file in fields_files:
+    for idx, fields_file in enumerate(fields_files):
         tstamp = os.path.basename(fields_file)[len("snapshot-"):-len(".dat")]
         facets_file = os.path.join(facets_dir, f"snapshot-{tstamp}.dat")
         wide_file = os.path.join(wide_dir, f"snapshot-{tstamp}.dat")
-        out_png = os.path.join(frames_dir, f"frame-{tstamp}.png")
+        out_png = os.path.join(frames_dir, f"frame-{idx:05d}.png")
         render_frame(facets_file, wide_file, fields_file, out_png,
                      float(tstamp))
-        print(f"  {out_png}")
+        print(f"  t={tstamp} -> {out_png}")
 
     video_path = os.path.join(pp_dir, "taylor_culick.mp4")
     cmd = [
-        "ffmpeg", "-y", "-framerate", str(args.fps),
-        "-pattern_type", "glob", "-i", os.path.join(frames_dir, "frame-*.png"),
+        # Explicit sequential numbering (-start_number/frame-%05d.png), not
+        # -pattern_type glob: glob sorts matches as strings, which is
+        # exactly the bug this frame-index naming exists to route around --
+        # don't reintroduce it by asking ffmpeg to re-derive the order.
+        "ffmpeg", "-y", "-framerate", str(args.fps), "-start_number", "0",
+        "-i", os.path.join(frames_dir, "frame-%05d.png"),
         "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
         "-c:v", "libx264", "-pix_fmt", "yuv420p", video_path,
     ]

@@ -7,13 +7,16 @@
 # the retracting tip (moves with it every snapshot) and one over a fixed
 # [0, wide-fraction*Ldomain] span of the domain.
 #
-# The comoving window is always an exact square centred on the tip, with
-# half-width scaled off the rim -- see the R_est derivation below. A fixed
-# 1:1 data aspect every snapshot is load-bearing, not cosmetic: plot_fields.py
-# derives the comoving panel's PIXEL SIZE from the data aspect ratio, so a
-# window whose shape changes frame to frame produces a differently-sized PNG
-# every frame -- ffmpeg then either fails or produces a visibly jumpy video.
-# Squaring it makes the panel size constant by construction.
+# The comoving window is always an exact square, sized off the rim (see the
+# R_est derivation below), with the tip at 1/4 of the width from the left
+# edge (not centred -- more room ahead of the tip for the rim-to-film
+# connection than behind it in the gas). A fixed 1:1 data aspect every
+# snapshot is load-bearing, not cosmetic: plot_fields.py derives the
+# comoving panel's PIXEL SIZE from the data aspect ratio, so a window whose
+# shape changes frame to frame produces a differently-sized PNG every frame
+# -- ffmpeg then either fails or produces a visibly jumpy video. Squaring
+# it makes the panel size constant by construction regardless of where the
+# tip sits inside it.
 #
 # Usage:
 #   run_postprocess.sh --case-dir DIR [--viscoelastic]
@@ -37,9 +40,11 @@ Options:
   --viscoelastic       Also extract A11/A12/A22/T11/T12/T22 (the snapshot
                        must come from TaylorCulickPlanar.c, not the
                        Newtonian-only case)
-  --window-coef N      Comoving window half-width W = coef*R_est + offset,
-                       in units of h0, applied symmetrically as
-                       [x_tip - W, x_tip + W] x [-W, W] (default coef 1.8)
+  --window-coef N      Comoving window scale W = coef*R_est + offset, in
+                       units of h0; the window is the exact square
+                       [x_tip - W/2, x_tip + 3*W/2] x [-W, W] -- tip at
+                       1/4 of the width from the left edge, not centred
+                       (default coef 1.8)
   --window-offset N    (default offset 2.0) -- R_est =
                        sqrt(h0*(x_tip - xtip0)/pi) is a mass-conservation
                        estimate of the rim's radius: the liquid swept by
@@ -192,18 +197,22 @@ for snap in "${SNAPSHOTS[@]}"; do
 
   "$BUILD_DIR/get_facets" "$snap_path" > "$FACETS_DIR/snapshot-$tstamp.dat"
 
-  # Comoving window: exact square, tip exactly centred -- see the
-  # usage-header derivation. R_est is a mass-conservation estimate: liquid
-  # swept by the retracting edge collects into a half-disk of this radius.
+  # Comoving window: exact square (full width = full height = 2*w), tip
+  # sitting at 1/4 of the width from the left edge rather than centred --
+  # see the usage-header derivation. R_est is a mass-conservation estimate:
+  # liquid swept by the retracting edge collects into a half-disk of this
+  # radius. Exact squareness is what matters for the fixed panel size (see
+  # below), not where the tip sits inside it, so the 1/4 placement doesn't
+  # reopen the flicker bug: xmax-xmin is still 2*w either way.
   # Deliberately NOT clamped to the domain: clamping only one side would
-  # break the exact tip-centred symmetry the fixed panel size depends on
+  # break the square's exact proportions the fixed panel size depends on
   # (see usage header for why interpolate() going out of domain is safe).
   r_est=$(awk -v x="$xtip" -v x0="$XTIP0" -v h="$H0" \
     'BEGIN{d=x-x0; if(d<0)d=0; print sqrt(h*d/3.14159265358979)}')
   w=$(awk -v r="$r_est" -v c="$WINDOW_COEF" -v o="$WINDOW_OFFSET" \
     'BEGIN{print c*r+o}')
-  xmin=$(awk -v x="$xtip" -v w="$w" 'BEGIN{print x-w}')
-  xmax=$(awk -v x="$xtip" -v w="$w" 'BEGIN{print x+w}')
+  xmin=$(awk -v x="$xtip" -v w="$w" 'BEGIN{print x-0.5*w}')
+  xmax=$(awk -v x="$xtip" -v w="$w" 'BEGIN{print x+1.5*w}')
   "$BUILD_DIR/get_fields" "$snap_path" "$xmin" "$xmax" 0 "$w" "$NY" \
     "$MU1" "$MU2" > "$FIELDS_DIR/snapshot-$tstamp.dat"
 
