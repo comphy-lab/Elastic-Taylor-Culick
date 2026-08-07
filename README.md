@@ -88,6 +88,88 @@ directory self-describing and restartable.
 out of the checkout. `--openmp` adds `-fopenmp`, so the run honours
 `OMP_NUM_THREADS`.
 
+### Always build parallel: the serial build traps on the first step
+
+Basilisk arms floating-point exception trapping in `grid/config.h` under
+
+```c
+#if (_GNU_SOURCE || __APPLE__) && !_OPENMP
+```
+
+and `qcc` passes `-D_GNU_SOURCE` itself, so a plain serial build of these
+cases has the trap armed and aborts with `SIGFPE` on the first timestep. An
+OpenMP build defines `_OPENMP` and compiles `enable_fpe()` out, which is why
+the trap has never shown up locally. Use `--openmp` or `--mpi`; the runner
+warns if you ask for neither.
+
+For MPI:
+
+```bash
+bash runSimulation.sh --case simulationCases/TaylorCulickPlanar.c \
+  --input default-planar.params --mpi --np 48
+```
+
+`--mpi` compiles with `-D_MPI=1 -D_DEFAULT_SOURCE` and points `$CC99` at
+`mpicc`. `-D_DEFAULT_SOURCE` still exposes the GNU features Basilisk needs
+(`MAP_ANONYMOUS`, `MADV_DONTNEED`) while leaving `enable_fpe()` a no-op:
+`qcc` strips `-D_GNU_SOURCE` from `$CC99` for MPI builds (`qcc.c:415`), so
+the resulting binary has the same FP behaviour as the trusted OpenMP one.
+Counting the symbol confirms the parity rather than assuming it:
+
+```
+nm <openmp-build>              | grep -c feenableexcept   ->  0
+nm <mpi-build -D_DEFAULT_SOURCE> | grep -c feenableexcept ->  0
+nm <mpi-build -D_GNU_SOURCE>     | grep -c feenableexcept ->  1
+```
+
+Never pass `-D_GNU_SOURCE` to an MPI build. `qcc` refuses to combine MPI with
+OpenMP (*"OpenMP cannot be used with MPI (yet)"*), so an MPI build has no
+`_OPENMP` to disarm the trap.
+
+Omit `--np` to compile and launch a single rank; on a scheduler, use
+`--compile-only` and submit the binary yourself.
+
+## Three silent failures the cases now guard against
+
+All three produced a run that completed normally and looked plausible. They
+are written up in the case sources next to the code that avoids them; this is
+the short version.
+
+**`dtmax=` in a parameter file binds `DT`, not `dtmax`.**
+`navier-stokes/centered.h` contains `event set_dtmax (i++,last) dtmax = DT;`,
+so `dtmax` is re-read from the global `DT` at the top of every timestep and
+an assignment in `main()` survives step 0 only. `DT` defaults to `HUGE`
+(`utils.h:8`), so from `i = 1` the requested cap was simply gone. The trap is
+that it is resolution-dependent: a coarse run survives and looks converged
+while the same script blows up at higher `MAXlevel`, which is backwards from
+how a refinement study should behave. Both cases now assign `DT`.
+
+**`refine()` tests cell centres, so the initial sheet could be smeared.**
+When `Ldomain/2^MINlevel` exceeds about `h0`, the first row of cells has its
+centre outside the band the pre-refinement is meant to resolve, nothing is
+refined, and `fraction()` writes one smeared value across the whole sheet.
+Both cases now test the cell's near edge (`y - Delta < ...`) instead, which
+makes the pre-refinement independent of `MINlevel`, and both check the
+initial volume against its analytic value and abort if it is off by more
+than 5%. Measured relative error on a healthy run is 3e-3 (planar) and
+1.4e-4 (axisymmetric).
+
+**A periodic event with a zero-initialised increment fires once.**
+`qcc` classifies `t += tsnap` as an increment or a condition by evaluating it
+twice at registration time, inside `_init_solver()`, which runs before
+`main()`. With `tsnap` still `0` the value does not advance, so the clause is
+classified as a *condition*, and that classification is never revisited --
+the snapshot event fired at `t = 0` and never again. Both cases now give
+`tsnap` a non-zero file-scope initialiser; the parameter-file value still
+wins, because `init_event()` re-runs at `iter == 0`.
+
+The capillary timestep constraint is **not** in this list. `tension.h`'s
+`stability` event was instrumented against this solver stack and does apply
+`dt_sigma = sqrt(rho_m*Delta_min^3/(pi*sigma))` correctly, using the actual
+finest interface cell. The cases print `dt_sigma` at `MAXlevel` in their
+header as the worst case a run can reach, so an achieved `dt` can be checked
+against it, but they do not re-impose it.
+
 ## Planar case
 
 `simulationCases/TaylorCulickPlanar.c` retracts a semi-infinite sheet of
