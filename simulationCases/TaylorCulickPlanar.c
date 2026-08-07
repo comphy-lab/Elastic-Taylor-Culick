@@ -202,11 +202,53 @@ int main (int argc, char const * argv[])
   TOLERANCE = 1e-4;
   CFL = 0.5;
 
+  /**
+  ## The timestep cap must be written to `DT`, not to `dtmax`
+
+  `navier-stokes/centered.h` contains
+
+  ~~~literatec
+  event set_dtmax (i++,last) dtmax = DT;
+  ~~~
+
+  so `dtmax` is re-read from the global `DT` at the top of *every*
+  timestep.  Assigning `dtmax` here would bind the first step only; from
+  `i = 1` onwards the cap silently reverts to `DT`.  The failure is
+  resolution-dependent -- a coarse run survives and looks converged while
+  the same script blows up at higher `MAXlevel` -- which is exactly
+  backwards from how a refinement study should behave.  Setting `DT` makes
+  the cap persistent, which is what `dtmax=` in the parameter file is
+  meant to express.
+
+  ## The capillary constraint is `tension.h`'s job, and it does it
+
+  `tension.h` contributes its own `stability` event that narrows `dtmax`
+  to the capillary limit
+
+  $$\Delta t_\sigma = \sqrt{\rho_m\Delta_{min}^3/(\pi\sigma)}$$
+
+  using the *actual* finest cell carrying an interface, not a worst-case
+  guess.  That narrowing was checked against this exact solver stack with
+  an instrumented `tension.h`: at `i = 0` it sees finite
+  `dmin`, `rho_m` and `sigma` and does apply the cap.  So the constraint
+  is reported below rather than re-imposed here -- clamping `DT` to the
+  `MAXlevel` value would pin every run to the finest cell the adaptation
+  *could* produce even while the interface still sits on coarser cells.
+
+  `dt_sigma` is printed at `MAXlevel` as the worst case the run can reach,
+  which is what to compare an achieved `dt` against when a high-resolution
+  run misbehaves.
+  */
+  const double rho_m = (rho1 + rho2)/2.;
+  const double Delta_min = Ldomain/(1 << MAXlevel);
+  const double dt_sigma = sqrt(rho_m*cube(Delta_min)/(pi*f.sigma));
+  DT = dtmax;
+
   if (pid() == 0) {
     fprintf(ferr,
             "PLANAR Taylor-Culick\n"
             "CaseNo=%d MAXlevel=%d MINlevel=%d Ldomain=%g "
-            "tmax=%g tsnap=%g tout=%g dtmax=%g VELERR=%g\n",
+            "tmax=%g tsnap=%g tout=%g dtmax_requested=%g VELERR=%g\n",
             CaseNo, MAXlevel, MINlevel, Ldomain,
             tmax, tsnap, tout, dtmax, VELERR);
     fprintf(ferr,
@@ -214,9 +256,10 @@ int main (int argc, char const * argv[])
             "phase2: rho=%g mu=%g G=%g lambda=%g\n",
             rho1, mu1, G1, lambda1, rho2, mu2, G2, lambda2);
     fprintf(ferr,
-            "TOLelastic=%g h0=%g xtip0=%g V_TC=%g tau_vis=%g Delta_min=%g\n",
+            "TOLelastic=%g h0=%g xtip0=%g V_TC=%g tau_vis=%g Delta_min=%g "
+            "dt_sigma=%g DT=%g\n",
             TOLelastic, h0, xtip0, sqrt(2.*f.sigma/(rho1*h0)), tauvis,
-            Ldomain/(1 << MAXlevel));
+            Delta_min, dt_sigma, DT);
   }
 
   run();
@@ -262,6 +305,38 @@ event init (t = 0)
     fraction(f, x < xc
              ? sq(h0/2.) - (sq(x - xc) + sq(y))
              : h0/2. - y);
+
+    /**
+    ## Fail loudly on a wrong initial condition
+
+    The smeared-initial-condition failure described above costs one wasted
+    campaign precisely because it is silent, so the initial state is
+    checked against its analytic value before the first timestep rather
+    than trusted.
+
+    The metric is unity here, so `sum f dv()` is the simulated half-sheet
+    area: the flat part `0 < y < h0/2`, `xc < x < L0` contributes
+    `(h0/2)(L0 - xc)` and the semicircular cap of radius `h0/2` adds
+    `pi h0^2/8`.
+
+    The tolerance is loose enough that ordinary VOF discretisation error
+    never trips it and tight enough that the smearing failure -- which put
+    the edge at `x = 1.573` instead of `x = 1` -- cannot get past.
+    */
+    const double expected = (h0/2.)*(L0 - xc) + pi*sq(h0)/8.;
+    double area = 0.;
+    foreach (reduction(+:area))
+      area += f[]*dv();
+
+    if (pid() == 0)
+      fprintf(ferr, "initial half-sheet area = %g (expected %g, "
+              "relative error %.3g)\n",
+              area, expected, fabs(area - expected)/expected);
+    if (fabs(area - expected) > 0.05*expected) {
+      fprintf(ferr, "ERROR: initial volume fraction is wrong; the sheet is "
+              "probably unresolved on the initial grid.\n");
+      return 1;
+    }
   }
 }
 
